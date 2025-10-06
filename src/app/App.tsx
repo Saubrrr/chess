@@ -1,5 +1,6 @@
 // Root application component - renders chess interface
 import ChessgroundBoard from "@/components/ChessgroundBoard"
+import "@/styles/globals.css"
 
 export default function App() {
   return (

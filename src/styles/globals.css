@@ -1,0 +1,47 @@
+/* Reset base layout - grey site background */
+html, body, #root {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background-color: #888; /* Grey site background */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  /* Chessground container */
+  .cg-wrap {
+    width: 560px;
+    height: 560px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid #ccc;
+    border-radius: 8px;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.15);
+    background: transparent; /* Transparent so grey site background shows through */
+  }
+  
+  /* Chess board background */
+  .cg-board {
+    background: white; /* White board background */
+  }
+  
+  /* Standard chess board colors - bottom right square will be black */
+  /* Light squares (bottom right = black, so this creates the checker pattern) */
+  .cg-board square.white {
+    background-color: #f0d9b5; /* Beige/cream for light squares */
+  }
+  
+  /* Dark squares (bottom right = black) */
+  .cg-board square.black {
+    background-color: #b58863; /* Brown for dark squares */
+  }
+  
+  /* Ensure proper square sizing */
+  .cg-board square {
+    width: 100%;
+    height: 100%;
+  }
+  
