@@ -9,14 +9,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@lichess-org/chessground": "^9.7.4",
+    "chess.js": "^1.4.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "@lichess-org/chessground": "^9.0.3",
-    "chess.js": "^1.0.0"
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
-    "vite": "^7.1.9",
     "@vitejs/plugin-react": "^5.0.4",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9"
   }
 }
