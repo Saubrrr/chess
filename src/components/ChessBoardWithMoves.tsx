@@ -42,6 +42,7 @@ export default function ChessBoardWithMoves({
   
   const [positions, setPositions] = useState<GamePosition[]>([])
   const [currentMoveIndex, setCurrentMoveIndex] = useState(-1)
+  const [orientation, setOrientation] = useState<"white" | "black">("white")
 
   // Update board to specific position
   const updateBoard = (position: GamePosition | null, moveIdx: number) => {
@@ -71,7 +72,7 @@ export default function ChessBoardWithMoves({
 
     // Initialize Chessground instance
     const api = Chessground(hostRef.current, {
-      orientation: "white",
+      orientation: orientation,
       coordinates: true,
       animation: { enabled: true, duration: 200 },
       highlight: { lastMove: true, check: true },
@@ -131,7 +132,7 @@ export default function ChessBoardWithMoves({
       apiRef.current = null
       if (hostRef.current) hostRef.current.innerHTML = ""
     }
-  }, [initialFen, movable, onMove])
+  }, [initialFen, movable, onMove, orientation])
 
   // Navigation functions
   const goToPrevious = () => {
@@ -164,6 +165,12 @@ export default function ChessBoardWithMoves({
   const navigateToMove = (index: number) => {
     setCurrentMoveIndex(index)
     updateBoard(positions[index], index)
+  }
+
+  const flipBoard = () => {
+    const newOrientation = orientation === "white" ? "black" : "white"
+    setOrientation(newOrientation)
+    apiRef.current?.set({ orientation: newOrientation })
   }
 
   // Format moves for display
@@ -297,6 +304,14 @@ export default function ChessBoardWithMoves({
             border: "1px solid #ccc",
             borderRadius: "4px"
           }}>⏭</button>
+          <button onClick={flipBoard} style={{
+            padding: "8px 12px",
+            fontSize: "16px",
+            cursor: "pointer",
+            backgroundColor: "#f0f0f0",
+            border: "1px solid #ccc",
+            borderRadius: "4px"
+          }}>🔄</button>
         </div>
       </div>
     </div>
