@@ -12,7 +12,8 @@
     "@lichess-org/chessground": "^9.7.4",
     "chess.js": "^1.4.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.3"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.4",
