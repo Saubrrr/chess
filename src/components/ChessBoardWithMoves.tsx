@@ -100,13 +100,13 @@ export default function ChessBoardWithMoves({
     }
   }, [initialFen, movable, onMove])
 
-  // Format moves in pairs for display (1. e4 e5, 2. Nf3 Nc6, etc.)
-  const formattedMoves: string[] = []
+  // Format moves in pairs for display
+  const formattedMoves: Array<{ num: number; white: string; black: string }> = []
   for (let i = 0; i < moveHistory.length; i += 2) {
     const moveNum = Math.floor(i / 2) + 1
     const whiteMove = moveHistory[i]
     const blackMove = moveHistory[i + 1] || ""
-    formattedMoves.push(`${moveNum}. ${whiteMove}${blackMove ? " " + blackMove : ""}`)
+    formattedMoves.push({ num: moveNum, white: whiteMove, black: blackMove })
   }
 
   return (
@@ -129,10 +129,17 @@ export default function ChessBoardWithMoves({
       }}>
         <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", fontWeight: "600" }}>Move List</h3>
         {formattedMoves.length > 0 ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
             {formattedMoves.map((move, index) => (
-              <div key={index} style={{ padding: "4px", fontSize: "14px" }}>
-                {move}
+              <div key={index} style={{ 
+                display: "grid", 
+                gridTemplateColumns: "40px 80px 80px",
+                padding: "4px", 
+                fontSize: "14px" 
+              }}>
+                <span>{move.num}.</span>
+                <span>{move.white}</span>
+                <span>{move.black}</span>
               </div>
             ))}
           </div>

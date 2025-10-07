@@ -31,7 +31,7 @@ export default function Navigation() {
         Home
       </Link>
       <Link to="/repertoire" style={linkStyle("/repertoire")}>
-        Repertoire Randomizer
+        Repertoire Randomiser
       </Link>
       <Link to="/practice" style={linkStyle("/practice")}>
         Practice vs Computer

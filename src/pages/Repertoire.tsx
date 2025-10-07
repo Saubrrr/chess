@@ -30,7 +30,7 @@ export default function Repertoire() {
     }}>
       <div style={{ maxWidth: "1200px", margin: "0 auto" }}>
         <h1 style={{ fontSize: "36px", marginBottom: "24px", fontWeight: "700" }}>
-          Repertoire Randomizer
+          Repertoire Randomiser
         </h1>
 
         {/* Upload Section */}
