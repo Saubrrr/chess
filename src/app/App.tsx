@@ -7,8 +7,7 @@ export default function App() {
     <div style={{ 
       minHeight: "100dvh", 
       display: "grid", 
-      placeItems: "center", 
-      background: "#f7f7f7" 
+      placeItems: "center"
     }}>
       <ChessgroundBoard />
     </div>
