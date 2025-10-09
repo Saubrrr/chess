@@ -5,17 +5,4 @@ html, body, #root {
   width: 100%;
   height: 100%;
 }
-
-/* Create checkered pattern with dark square at a1 (bottom-left) */
-cg-board {
-  /* Create checkerboard using repeating-conic-gradient */
-  background-image: repeating-conic-gradient(
-    #b58863 0deg 90deg,
-    #f0d9b5 90deg 180deg,
-    #b58863 180deg 270deg,
-    #f0d9b5 270deg 360deg
-  );
-  background-size: 25% 25%;
-  background-position: 0 0;
-}
   
