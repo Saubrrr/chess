@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Chess, Move, Square, PieceSymbol, Color } from "chess.js"
 import PieceImage from "./PieceImage"
-
-interface GamePosition {
-  move: Move
-  fen: string
-}
+import { MoveNode, createMoveNode, getPathToNode } from "@/types/moveTree"
 
 interface ChessBoardWithMovesProps {
   onMove?: (move: Move) => void
@@ -21,8 +17,9 @@ export default function ChessBoardWithMoves({
   const gameRef = useRef(new Chess(initialFen))
   const [boardKey, setBoardKey] = useState(0)
   
-  const [positions, setPositions] = useState<GamePosition[]>([])
-  const [currentMoveIndex, setCurrentMoveIndex] = useState(-1)
+  // Move tree state
+  const [rootNode, setRootNode] = useState<MoveNode | null>(null)
+  const [currentNode, setCurrentNode] = useState<MoveNode | null>(null)
   const [orientation, setOrientation] = useState<"white" | "black">("white")
 
   // Board interaction states
@@ -49,21 +46,21 @@ export default function ChessBoardWithMoves({
 
   // Get current game state
   const getCurrentGame = () => {
-    if (currentMoveIndex === -1) {
+    if (!currentNode) {
       const game = new Chess(initialFen)
       return game
-    } else if (currentMoveIndex < positions.length) {
-      const game = new Chess(positions[currentMoveIndex].fen)
+    } else {
+      const game = new Chess(currentNode.fen)
       return game
     }
-    return gameRef.current
   }
 
-  const isAtLatestMove = currentMoveIndex === positions.length - 1 || (positions.length === 0 && currentMoveIndex === -1)
+  // Check if we're at a leaf node (can add new moves)
+  const isAtLeafNode = !currentNode || currentNode.children.length === 0
 
   // Handle piece selection
   const handleSquareClick = (square: Square) => {
-    if (!movable || !isAtLatestMove) return
+    if (!movable) return
 
     const game = getCurrentGame()
     const piece = game.get(square)
@@ -105,24 +102,42 @@ export default function ChessBoardWithMoves({
 
     const move = game.move({ from, to, promotion: promotion || 'q' })
     if (move) {
+      const newFen = game.fen()
+      
+      // Check if this move already exists as a child
+      const existingChild = currentNode?.children.find(
+        child => child.move.san === move.san && child.move.from === move.from && child.move.to === move.to
+      )
+      
+      if (existingChild) {
+        // Navigate to existing variation
+        setCurrentNode(existingChild)
+        setLastMove([existingChild.move.from as Square, existingChild.move.to as Square])
+      } else {
+        // Create new node
+        const isMainLine = !currentNode || currentNode.children.length === 0
+        const newNode = createMoveNode(move, newFen, currentNode, isMainLine)
+        
+        if (!currentNode) {
+          // This is the first move
+          setRootNode(newNode)
+        } else {
+          // Add as child to current node
+          currentNode.children.push(newNode)
+        }
+        
+        setCurrentNode(newNode)
+        setLastMove([move.from as Square, move.to as Square])
+      }
+      
       gameRef.current = game
-      setLastMove([move.from as Square, move.to as Square])
       setSelectedSquare(null)
       setLegalMoves([])
       setPromotionState(null)
-
-            // Add move to positions
-            const newPosition: GamePosition = {
-              move,
-              fen: game.fen()
-            }
-            
-            setPositions(prev => [...prev, newPosition])
-            setCurrentMoveIndex(prev => prev + 1)
       setBoardKey(prev => prev + 1)
 
-            // Call callback if provided
-            if (onMove) onMove(move)
+      // Call callback if provided
+      if (onMove) onMove(move)
     }
   }
 
@@ -135,7 +150,7 @@ export default function ChessBoardWithMoves({
 
   // Drag and drop handlers
   const handleMouseDown = (e: React.MouseEvent, square: Square) => {
-    if (!movable || !isAtLatestMove) return
+    if (!movable) return
 
     const game = getCurrentGame()
     const piece = game.get(square)
@@ -194,10 +209,10 @@ export default function ChessBoardWithMoves({
     }
   }, [draggedPiece, legalMoves])
 
-  // Update board to specific position
-  const updateBoard = (position: GamePosition | null, moveIdx: number) => {
-    if (position) {
-      setLastMove([position.move.from as Square, position.move.to as Square])
+  // Update board to specific node
+  const updateBoard = (node: MoveNode | null) => {
+    if (node) {
+      setLastMove([node.move.from as Square, node.move.to as Square])
     } else {
       setLastMove(null)
     }
@@ -208,35 +223,52 @@ export default function ChessBoardWithMoves({
 
   // Navigation functions
   const goToPrevious = () => {
-    if (currentMoveIndex < 0) return
-    const newIndex = currentMoveIndex - 1
-    setCurrentMoveIndex(newIndex)
-    const position = newIndex >= 0 ? positions[newIndex] : null
-    updateBoard(position, newIndex)
+    if (!currentNode) return
+    if (currentNode.parent) {
+      setCurrentNode(currentNode.parent)
+      updateBoard(currentNode.parent)
+    } else {
+      // Go to start
+      setCurrentNode(null)
+      updateBoard(null)
+    }
   }
 
   const goToNext = () => {
-    if (currentMoveIndex >= positions.length - 1) return
-    const newIndex = currentMoveIndex + 1
-    setCurrentMoveIndex(newIndex)
-    updateBoard(positions[newIndex], newIndex)
+    if (!currentNode && rootNode) {
+      // From start, go to first move
+      setCurrentNode(rootNode)
+      updateBoard(rootNode)
+    } else if (currentNode && currentNode.children.length > 0) {
+      // Go to first child (main line)
+      const nextNode = currentNode.children.find(child => child.isMainLine) || currentNode.children[0]
+      setCurrentNode(nextNode)
+      updateBoard(nextNode)
+    }
   }
 
   const goToStart = () => {
-    setCurrentMoveIndex(-1)
-    updateBoard(null, -1)
+    setCurrentNode(null)
+    updateBoard(null)
   }
 
   const goToEnd = () => {
-    if (positions.length === 0) return
-    const newIndex = positions.length - 1
-    setCurrentMoveIndex(newIndex)
-    updateBoard(positions[newIndex], newIndex)
+    if (!rootNode) return
+    
+    // Follow main line to the end
+    let node = rootNode
+    while (node.children.length > 0) {
+      const nextMainMove = node.children.find(child => child.isMainLine) || node.children[0]
+      node = nextMainMove
+    }
+    
+    setCurrentNode(node)
+    updateBoard(node)
   }
 
-  const navigateToMove = (index: number) => {
-    setCurrentMoveIndex(index)
-    updateBoard(positions[index], index)
+  const navigateToNode = (node: MoveNode) => {
+    setCurrentNode(node)
+    updateBoard(node)
   }
 
   const flipBoard = () => {
@@ -304,7 +336,7 @@ export default function ChessBoardWithMoves({
                       isKingInCheck(square) ? '#ff6b6b' :
                       isSquareLastMove(square) ? '#baca44' :
                       isSquareLight(file, rank) ? '#f0d9b5' : '#b58863',
-                    cursor: movable && isAtLatestMove ? 'pointer' : 'default',
+                    cursor: movable ? 'pointer' : 'default',
                     position: 'relative',
                     display: 'flex',
                     alignItems: 'center',
@@ -434,23 +466,11 @@ export default function ChessBoardWithMoves({
     )
   }
 
-  // Format moves for display
-  const formattedMoves: Array<{
-    moveNum: number
-    white: GamePosition | null
-    black: GamePosition | null
-  }> = []
+  // Get current path for display
+  const currentPath = getPathToNode(currentNode)
   
-  for (let i = 0; i < positions.length; i += 2) {
-    const whiteMove = positions[i]
-    const blackMove = positions[i + 1] || null
-    
-    formattedMoves.push({
-      moveNum: Math.floor(i / 2) + 1,
-      white: whiteMove,
-      black: blackMove
-    })
-  }
+  // Get available variations at current position
+  const availableVariations = currentNode ? currentNode.children : (rootNode ? [rootNode] : [])
 
   return (
     <div style={{ display: "flex", gap: "20px", alignItems: "flex-start" }}>
@@ -474,52 +494,86 @@ export default function ChessBoardWithMoves({
           borderRadius: "8px",
           padding: "16px",
           overflowY: "auto",
-          fontFamily: "monospace"
+          fontFamily: "monospace",
+          display: "flex",
+          flexDirection: "column",
+          gap: "16px"
         }}>
-          <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", fontWeight: "600" }}>Move List</h3>
-          {formattedMoves.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-              {formattedMoves.map((movePair, index) => {
-                const whiteIndex = index * 2
-                const blackIndex = index * 2 + 1
-                return (
-                  <div key={index} style={{ 
-                    display: "grid", 
-                    gridTemplateColumns: "40px 80px 80px",
-                    padding: "4px", 
-                    fontSize: "14px"
-                  }}>
-                    <span>{movePair.moveNum}.</span>
+          <div>
+            <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", fontWeight: "600" }}>Current Path</h3>
+            {currentPath.length > 0 ? (
+              <div style={{ 
+                display: "flex", 
+                flexWrap: "wrap",
+                gap: "4px",
+                alignItems: "center"
+              }}>
+                <span 
+                  style={{
+                    cursor: "pointer",
+                    padding: "4px 8px",
+                    backgroundColor: !currentNode ? "#e3f2fd" : "transparent",
+                    borderRadius: "4px",
+                    fontSize: "14px",
+                    fontWeight: !currentNode ? "bold" : "normal"
+                  }}
+                  onClick={goToStart}
+                >
+                  Start
+                </span>
+                {currentPath.map((node, index) => (
+                  <span key={node.id} style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                    <span style={{ color: "#999" }}>→</span>
                     <span 
-                      style={{ 
-                        fontWeight: currentMoveIndex === whiteIndex ? "bold" : "normal",
-                        backgroundColor: currentMoveIndex === whiteIndex ? "#e3f2fd" : "transparent",
+                      style={{
                         cursor: "pointer",
-                        padding: "2px 4px",
-                        borderRadius: "2px"
+                        padding: "4px 8px",
+                        backgroundColor: node === currentNode ? "#e3f2fd" : "transparent",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: node === currentNode ? "bold" : "normal"
                       }}
-                      onClick={() => navigateToMove(whiteIndex)}
+                      onClick={() => navigateToNode(node)}
                     >
-                      {movePair.white?.move.san}
+                      {index % 2 === 0 && `${Math.floor(index / 2) + 1}. `}
+                      {node.move.san}
                     </span>
-                    <span 
-                      style={{ 
-                        fontWeight: currentMoveIndex === blackIndex ? "bold" : "normal",
-                        backgroundColor: currentMoveIndex === blackIndex ? "#e3f2fd" : "transparent",
-                        cursor: movePair.black ? "pointer" : "default",
-                        padding: "2px 4px",
-                        borderRadius: "2px"
-                      }}
-                      onClick={() => movePair.black && navigateToMove(blackIndex)}
-                    >
-                      {movePair.black?.move.san || ""}
-                    </span>
-                  </div>
-                )
-              })}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p style={{ color: "#999", fontSize: "14px" }}>No moves yet</p>
+            )}
+          </div>
+
+          {/* Available Variations */}
+          {availableVariations.length > 0 && (
+            <div>
+              <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", fontWeight: "600" }}>
+                Next Moves {availableVariations.length > 1 && `(${availableVariations.length} variations)`}
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                {availableVariations.map((node, index) => (
+                  <button
+                    key={node.id}
+                    onClick={() => navigateToNode(node)}
+                    style={{
+                      padding: "8px 12px",
+                      fontSize: "14px",
+                      textAlign: "left",
+                      cursor: "pointer",
+                      backgroundColor: node.isMainLine ? "#e8f5e9" : "#fff3e0",
+                      border: "2px solid #ccc",
+                      borderRadius: "4px",
+                      fontFamily: "monospace",
+                      fontWeight: "500"
+                    }}
+                  >
+                    {node.move.san} {node.isMainLine && "(main)"}
+                  </button>
+                ))}
+              </div>
             </div>
-          ) : (
-            <p style={{ color: "#999", fontSize: "14px" }}>No moves yet</p>
           )}
         </div>
 
