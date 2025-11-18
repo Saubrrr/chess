@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Chess, Move, Square, PieceSymbol, Color } from "chess.js"
 import PieceImage from "./PieceImage"
-import { MoveNode, createMoveNode, getPathToNode } from "@/types/moveTree"
+import { MoveNode, createMoveNode, getPathToNode, buildTreeDisplay, TreeLine } from "@/types/moveTree"
 
 interface ChessBoardWithMovesProps {
   onMove?: (move: Move) => void
@@ -17,8 +17,8 @@ export default function ChessBoardWithMoves({
   const gameRef = useRef(new Chess(initialFen))
   const [boardKey, setBoardKey] = useState(0)
   
-  // Move tree state
-  const [rootNode, setRootNode] = useState<MoveNode | null>(null)
+  // Move tree state - now supports multiple root nodes
+  const [rootNodes, setRootNodes] = useState<MoveNode[]>([])
   const [currentNode, setCurrentNode] = useState<MoveNode | null>(null)
   const [orientation, setOrientation] = useState<"white" | "black">("white")
 
@@ -104,8 +104,27 @@ export default function ChessBoardWithMoves({
     if (move) {
       const newFen = game.fen()
       
+      if (!currentNode) {
+        // This is a first move - check if it already exists in root nodes
+        const existingRoot = rootNodes.find(
+          root => root.move.san === move.san && root.move.from === move.from && root.move.to === move.to
+        )
+        
+        if (existingRoot) {
+          // Navigate to existing first move
+          setCurrentNode(existingRoot)
+          setLastMove([existingRoot.move.from as Square, existingRoot.move.to as Square])
+        } else {
+          // Create new root node
+          const isMainLine = rootNodes.length === 0
+          const newNode = createMoveNode(move, newFen, null, isMainLine)
+          setRootNodes(prev => [...prev, newNode])
+          setCurrentNode(newNode)
+          setLastMove([move.from as Square, move.to as Square])
+        }
+      } else {
       // Check if this move already exists as a child
-      const existingChild = currentNode?.children.find(
+        const existingChild = currentNode.children.find(
         child => child.move.san === move.san && child.move.from === move.from && child.move.to === move.to
       )
       
@@ -115,19 +134,12 @@ export default function ChessBoardWithMoves({
         setLastMove([existingChild.move.from as Square, existingChild.move.to as Square])
       } else {
         // Create new node
-        const isMainLine = !currentNode || currentNode.children.length === 0
+          const isMainLine = currentNode.children.length === 0
         const newNode = createMoveNode(move, newFen, currentNode, isMainLine)
-        
-        if (!currentNode) {
-          // This is the first move
-          setRootNode(newNode)
-        } else {
-          // Add as child to current node
           currentNode.children.push(newNode)
+          setCurrentNode(newNode)
+          setLastMove([move.from as Square, move.to as Square])
         }
-        
-        setCurrentNode(newNode)
-        setLastMove([move.from as Square, move.to as Square])
       }
       
       gameRef.current = game
@@ -235,10 +247,11 @@ export default function ChessBoardWithMoves({
   }
 
   const goToNext = () => {
-    if (!currentNode && rootNode) {
-      // From start, go to first move
-      setCurrentNode(rootNode)
-      updateBoard(rootNode)
+    if (!currentNode && rootNodes.length > 0) {
+      // From start, go to first move (main line root)
+      const firstRoot = rootNodes.find(r => r.isMainLine) || rootNodes[0]
+      setCurrentNode(firstRoot)
+      updateBoard(firstRoot)
     } else if (currentNode && currentNode.children.length > 0) {
       // Go to first child (main line)
       const nextNode = currentNode.children.find(child => child.isMainLine) || currentNode.children[0]
@@ -253,10 +266,12 @@ export default function ChessBoardWithMoves({
   }
 
   const goToEnd = () => {
-    if (!rootNode) return
+    if (rootNodes.length === 0) return
+    
+    // Start from main line root
+    let node = rootNodes.find(r => r.isMainLine) || rootNodes[0]
     
     // Follow main line to the end
-    let node = rootNode
     while (node.children.length > 0) {
       const nextMainMove = node.children.find(child => child.isMainLine) || node.children[0]
       node = nextMainMove
@@ -312,8 +327,8 @@ export default function ChessBoardWithMoves({
       }}>
         <div style={{ 
           display: 'grid', 
-          gridTemplateColumns: 'repeat(8, 70px)',
-          gridTemplateRows: 'repeat(8, 70px)',
+          gridTemplateColumns: 'repeat(8, 100px)',
+          gridTemplateRows: 'repeat(8, 100px)',
           gap: 0,
           position: 'relative'
         }}>
@@ -348,7 +363,7 @@ export default function ChessBoardWithMoves({
                 >
                   {/* Piece */}
                   {pieceKey && !isDragging && (
-                    <PieceImage piece={pieceKey} size={60} />
+                    <PieceImage piece={pieceKey} size={85} />
                   )}
                   
                   {/* Legal move indicator */}
@@ -401,13 +416,13 @@ export default function ChessBoardWithMoves({
         {draggedPiece && dragPosition && (
           <div style={{
             position: 'fixed',
-            left: dragPosition.x - 30,
-            top: dragPosition.y - 30,
+            left: dragPosition.x - 42,
+            top: dragPosition.y - 42,
             pointerEvents: 'none',
             zIndex: 1000,
             opacity: 0.9
           }}>
-            <PieceImage piece={draggedPiece.piece} size={60} />
+            <PieceImage piece={draggedPiece.piece} size={85} />
           </div>
         )}
         
@@ -455,7 +470,7 @@ export default function ChessBoardWithMoves({
                     onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#e0e0e0'}
                     onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#f0f0f0'}
                   >
-                    <PieceImage piece={pieceKey} size={48} />
+                    <PieceImage piece={pieceKey} size={60} />
                   </button>
                 )
               })}
@@ -470,111 +485,198 @@ export default function ChessBoardWithMoves({
   const currentPath = getPathToNode(currentNode)
   
   // Get available variations at current position
-  const availableVariations = currentNode ? currentNode.children : (rootNode ? [rootNode] : [])
+  const availableVariations = currentNode ? currentNode.children : rootNodes
+
+  // Render tree display for moves
+  const renderTreeDisplay = () => {
+    if (rootNodes.length === 0) {
+      return <p style={{ color: "#999", fontSize: "14px" }}>No moves yet</p>
+    }
+
+    // Check if a variation is simple (no complex branching)
+    const isSimpleVariation = (node: MoveNode): boolean => {
+      let current: MoveNode | null = node
+      while (current) {
+        // If any node in the line has 2+ children, it's not simple
+        if (current.children.length >= 2) {
+          return false
+        }
+        current = current.children.length === 1 ? current.children[0] : null
+      }
+      return true
+    }
+
+    const renderMoveLine = (node: MoveNode, depth: number, moveNumber: number, isWhite: boolean, showMoveNumber: boolean = true): JSX.Element[] => {
+      const elements: JSX.Element[] = []
+      const isCurrentNode = node === currentNode
+      
+      // Render this move
+      elements.push(
+        <span key={node.id} style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
+          {/* Move number - show for white moves or when starting a new line */}
+          {showMoveNumber && (
+            <span style={{ color: "#666", fontSize: "13px", fontWeight: "500", marginLeft: "4px" }}>
+              {isWhite ? `${moveNumber}.` : `${moveNumber}...`}
+            </span>
+          )}
+          {/* Move itself */}
+          <span
+            onClick={() => navigateToNode(node)}
+            style={{
+              cursor: "pointer",
+              padding: "2px 6px",
+              backgroundColor: isCurrentNode ? "#4a90e2" : "transparent",
+              color: isCurrentNode ? "#fff" : "#000",
+              borderRadius: "3px",
+              fontSize: "14px",
+              fontWeight: isCurrentNode ? "bold" : "normal",
+              fontFamily: "monospace",
+              transition: "background-color 0.15s"
+            }}
+            onMouseEnter={(e) => {
+              if (!isCurrentNode) {
+                e.currentTarget.style.backgroundColor = "#e0e0e0"
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!isCurrentNode) {
+                e.currentTarget.style.backgroundColor = "transparent"
+              }
+            }}
+          >
+            {node.move.san}
+          </span>
+        </span>
+      )
+
+      // Process children
+      if (node.children.length > 0) {
+        const nextMoveNumber = !isWhite ? moveNumber + 1 : moveNumber
+        const nextIsWhite = !isWhite
+        
+        if (node.children.length === 1) {
+          // Only one continuation - keep it on the same line
+          const child = node.children[0]
+          elements.push(...renderMoveLine(child, depth, nextMoveNumber, nextIsWhite, nextIsWhite))
+        } else if (node.children.length === 2) {
+          // Two variations - check if variation is simple enough for inline display
+          const mainLineChild = node.children.find(c => c.isMainLine) || node.children[0]
+          const variation = node.children.find(c => c !== mainLineChild)!
+          
+          // Only use inline parentheses if the variation is simple (no further branching)
+          if (isSimpleVariation(variation)) {
+            // Add variation in parentheses inline
+            elements.push(
+              <span key={`paren-${variation.id}`} style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
+                <span style={{ color: "#888", marginLeft: "4px", marginRight: "2px" }}>(</span>
+                {renderMoveLine(variation, depth, nextMoveNumber, nextIsWhite, true)}
+                <span style={{ color: "#888", marginLeft: "2px", marginRight: "4px" }}>)</span>
+              </span>
+            )
+            
+            // Continue with main line
+            elements.push(...renderMoveLine(mainLineChild, depth, nextMoveNumber, nextIsWhite, nextIsWhite))
+          } else {
+            // If variation is complex, show both on separate lines
+            node.children.forEach((child) => {
+              elements.push(
+                <div key={`var-${child.id}`} style={{
+                  display: "block",
+                  paddingLeft: `${20}px`,
+                  borderLeft: "2px solid #ccc",
+                  marginLeft: "4px",
+                  marginTop: "4px",
+                  marginBottom: "4px",
+                  paddingTop: "2px",
+                  paddingBottom: "2px"
+                }}>
+                  {renderMoveLine(child, depth + 1, nextMoveNumber, nextIsWhite, true)}
+                </div>
+              )
+            })
+          }
+        } else {
+          // 3+ variations - show all on separate indented lines
+          node.children.forEach((child) => {
+            elements.push(
+              <div key={`var-${child.id}`} style={{
+                display: "block",
+                paddingLeft: `${20}px`,
+                borderLeft: "2px solid #ccc",
+                marginLeft: "4px",
+                marginTop: "4px",
+                marginBottom: "4px",
+                paddingTop: "2px",
+                paddingBottom: "2px"
+              }}>
+                {/* Always show move number when starting a new variation line */}
+                {renderMoveLine(child, depth + 1, nextMoveNumber, nextIsWhite, true)}
+              </div>
+            )
+          })
+        }
+      }
+
+      return elements
+    }
+
+    return (
+      <div style={{ lineHeight: "1.8" }}>
+        {rootNodes.map((rootNode, index) => {
+          if (index === 0 || rootNode.isMainLine) {
+            // Main line root - always starts with 1.
+            return (
+              <div key={rootNode.id} style={{ marginBottom: "8px" }}>
+                {renderMoveLine(rootNode, 0, 1, true, true)}
+              </div>
+            )
+          } else {
+            // Alternative first move - show as 1... if black's turn
+            return (
+              <div key={rootNode.id} style={{
+                marginBottom: "8px",
+                paddingLeft: "20px",
+                borderLeft: "2px solid #ccc",
+                marginLeft: "4px",
+                paddingTop: "2px",
+                paddingBottom: "2px"
+              }}>
+                {renderMoveLine(rootNode, 1, 1, true, true)}
+              </div>
+            )
+          }
+        })}
+      </div>
+    )
+  }
 
   return (
     <div style={{ display: "flex", gap: "20px", alignItems: "flex-start" }}>
       {/* Chess Board */}
-      <div key={boardKey} style={{ width: 560, height: 560 }}>
+      <div key={boardKey} style={{ width: 800, height: 800 }}>
         {renderBoard()}
       </div>
 
       {/* Move List Panel */}
       <div style={{
-        width: "280px",
+        width: "450px",
         display: "flex",
         flexDirection: "column",
         gap: "8px"
       }}>
-        {/* Move List */}
+        {/* Move Tree Display */}
         <div style={{
-          height: "460px",
+          height: "700px",
           backgroundColor: "#fff",
           border: "2px solid #ccc",
           borderRadius: "8px",
           padding: "16px",
           overflowY: "auto",
-          fontFamily: "monospace",
-          display: "flex",
-          flexDirection: "column",
-          gap: "16px"
+          overflowX: "auto",
+          fontFamily: "monospace"
         }}>
-          <div>
-            <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", fontWeight: "600" }}>Current Path</h3>
-            {currentPath.length > 0 ? (
-              <div style={{ 
-                display: "flex", 
-                flexWrap: "wrap",
-                gap: "4px",
-                alignItems: "center"
-              }}>
-                <span 
-                  style={{
-                    cursor: "pointer",
-                    padding: "4px 8px",
-                    backgroundColor: !currentNode ? "#e3f2fd" : "transparent",
-                    borderRadius: "4px",
-                    fontSize: "14px",
-                    fontWeight: !currentNode ? "bold" : "normal"
-                  }}
-                  onClick={goToStart}
-                >
-                  Start
-                </span>
-                {currentPath.map((node, index) => (
-                  <span key={node.id} style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                    <span style={{ color: "#999" }}>→</span>
-                    <span 
-                      style={{
-                        cursor: "pointer",
-                        padding: "4px 8px",
-                        backgroundColor: node === currentNode ? "#e3f2fd" : "transparent",
-                        borderRadius: "4px",
-                        fontSize: "14px",
-                        fontWeight: node === currentNode ? "bold" : "normal"
-                      }}
-                      onClick={() => navigateToNode(node)}
-                    >
-                      {index % 2 === 0 && `${Math.floor(index / 2) + 1}. `}
-                      {node.move.san}
-                    </span>
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p style={{ color: "#999", fontSize: "14px" }}>No moves yet</p>
-            )}
-          </div>
-
-          {/* Available Variations */}
-          {availableVariations.length > 0 && (
-            <div>
-              <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", fontWeight: "600" }}>
-                Next Moves {availableVariations.length > 1 && `(${availableVariations.length} variations)`}
-              </h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                {availableVariations.map((node, index) => (
-                  <button
-                    key={node.id}
-                    onClick={() => navigateToNode(node)}
-                    style={{
-                      padding: "8px 12px",
-                      fontSize: "14px",
-                      textAlign: "left",
-                      cursor: "pointer",
-                      backgroundColor: node.isMainLine ? "#e8f5e9" : "#fff3e0",
-                      border: "2px solid #ccc",
-                      borderRadius: "4px",
-                      fontFamily: "monospace",
-                      fontWeight: "500"
-                    }}
-                  >
-                    {node.move.san} {node.isMainLine && "(main)"}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+          <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", fontWeight: "600" }}>Move Tree</h3>
+          {renderTreeDisplay()}
         </div>
 
         {/* Navigation Controls */}
