@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { Chess, Move, Square, PieceSymbol, Color } from "chess.js"
 import PieceImage from "./PieceImage"
 import { MoveNode, createMoveNode, getPathToNode, buildTreeDisplay, TreeLine } from "@/types/moveTree"
+import { exportToPGN, importFromPGN, PGNMetadata } from "@/utils/pgnUtils"
 
 interface ChessBoardWithMovesProps {
   onMove?: (move: Move) => void
@@ -21,7 +22,19 @@ export default function ChessBoardWithMoves({
   const [rootNodes, setRootNodes] = useState<MoveNode[]>([])
   const [currentNode, setCurrentNode] = useState<MoveNode | null>(null)
   const [orientation, setOrientation] = useState<"white" | "black">("white")
-
+  
+  // Dropdown menu state
+  const [dropdownMenu, setDropdownMenu] = useState<{
+    node: MoveNode
+    x: number
+    y: number
+  } | null>(null)
+  
+  // Comment editing state
+  const [editingComment, setEditingComment] = useState<{
+    node: MoveNode
+  } | null>(null)
+ 
   // Board interaction states
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
   const [legalMoves, setLegalMoves] = useState<Square[]>([])
@@ -221,6 +234,52 @@ export default function ChessBoardWithMoves({
     }
   }, [draggedPiece, legalMoves])
 
+  // Keyboard navigation with arrow keys
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't handle if user is typing in an input or textarea
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return
+      }
+
+      // Close dropdown on Escape
+      if (e.key === 'Escape' && dropdownMenu) {
+        setDropdownMenu(null)
+        return
+      }
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        if (!currentNode) return
+        if (currentNode.parent) {
+          setCurrentNode(currentNode.parent)
+          updateBoard(currentNode.parent)
+        } else {
+          setCurrentNode(null)
+          updateBoard(null)
+        }
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        if (!currentNode && rootNodes.length > 0) {
+          const firstRoot = rootNodes.find(r => r.isMainLine) || rootNodes[0]
+          setCurrentNode(firstRoot)
+          updateBoard(firstRoot)
+        } else if (currentNode && currentNode.children.length > 0) {
+          const nextNode = currentNode.children.find(child => child.isMainLine) || currentNode.children[0]
+          setCurrentNode(nextNode)
+          updateBoard(nextNode)
+        }
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [currentNode, rootNodes, dropdownMenu])
+
   // Update board to specific node
   const updateBoard = (node: MoveNode | null) => {
     if (node) {
@@ -260,6 +319,21 @@ export default function ChessBoardWithMoves({
     }
   }
 
+  // Collect all nodes with branching paths (multiple children)
+  const collectBranchingNodes = (nodes: MoveNode[]): Array<{ node: MoveNode; children: MoveNode[] }> => {
+    const branches: Array<{ node: MoveNode; children: MoveNode[] }> = []
+    
+    const traverse = (node: MoveNode) => {
+      if (node.children.length > 1) {
+        branches.push({ node, children: node.children })
+      }
+      node.children.forEach(child => traverse(child))
+    }
+    
+    nodes.forEach(root => traverse(root))
+    return branches
+  }
+
   const goToStart = () => {
     setCurrentNode(null)
     updateBoard(null)
@@ -284,6 +358,71 @@ export default function ChessBoardWithMoves({
   const navigateToNode = (node: MoveNode) => {
     setCurrentNode(node)
     updateBoard(node)
+  }
+
+  // Check if a node is the ancestor node or a descendant of it
+  const isDescendant = (node: MoveNode, ancestor: MoveNode): boolean => {
+    // First check if it's the node itself
+    if (node === ancestor) {
+      return true
+    }
+    
+    // Then traverse up the tree to see if ancestor is in the path
+    let current: MoveNode | null = node
+    while (current && current.parent) {
+      current = current.parent
+      if (current === ancestor) {
+        return true
+      }
+    }
+    return false
+  }
+
+  // Remove a move and all its descendants
+  const removeMove = (nodeToRemove: MoveNode) => {
+    // Check if current node is the one being removed or a descendant
+    const isRemovingCurrent = currentNode && isDescendant(currentNode, nodeToRemove)
+    
+    if (nodeToRemove.parent) {
+      // Remove from parent's children
+      const parent = nodeToRemove.parent
+      const index = parent.children.indexOf(nodeToRemove)
+      if (index !== -1) {
+        // Create new array without the removed node
+        const newChildren = parent.children.filter(n => n !== nodeToRemove)
+        parent.children = newChildren
+        
+        // If we removed the main line and there are other children, make the first one the main line
+        if (nodeToRemove.isMainLine && newChildren.length > 0) {
+          newChildren[0].isMainLine = true
+        }
+        
+        // Update state to trigger re-render
+        setRootNodes([...rootNodes])
+        
+        // Navigate safely if needed
+        if (isRemovingCurrent) {
+          setCurrentNode(parent)
+          updateBoard(parent)
+        }
+      }
+    } else {
+      // Remove from root nodes
+      const newRootNodes = rootNodes.filter(n => n !== nodeToRemove)
+      
+      // If we removed the main line root and there are other roots, make the first one the main line
+      if (nodeToRemove.isMainLine && newRootNodes.length > 0) {
+        newRootNodes[0].isMainLine = true
+      }
+      
+      setRootNodes(newRootNodes)
+      
+      // Navigate safely if needed
+      if (isRemovingCurrent) {
+        setCurrentNode(null)
+        updateBoard(null)
+      }
+    }
   }
 
   const flipBoard = () => {
@@ -486,6 +625,53 @@ export default function ChessBoardWithMoves({
   
   // Get available variations at current position
   const availableVariations = currentNode ? currentNode.children : rootNodes
+  
+  // Get move number and color for a position
+  const getMoveNumberForPosition = (node: MoveNode | null): { number: number; isWhite: boolean } => {
+    if (!node) {
+      const game = new Chess(initialFen)
+      return { number: 1, isWhite: game.turn() === 'w' }
+    }
+    
+    // Count moves by traversing up to root
+    let moveCount = 0
+    let current: MoveNode | null = node
+    
+    // Build path to root
+    const path: MoveNode[] = []
+    while (current) {
+      path.push(current)
+      current = current.parent
+    }
+    
+    // Count white and black moves
+    let whiteMoves = 0
+    let blackMoves = 0
+    
+    // Check starting position
+    const startGame = new Chess(initialFen)
+    const startIsWhite = startGame.turn() === 'w'
+    
+    path.reverse().forEach((n, idx) => {
+      if (idx === 0 && !startIsWhite) {
+        // First move is black
+        blackMoves++
+      } else {
+        // Alternate moves
+        if ((idx + (startIsWhite ? 0 : 1)) % 2 === 0) {
+          whiteMoves++
+        } else {
+          blackMoves++
+        }
+      }
+    })
+    
+    // The move number is white moves, and next move is white if whiteMoves === blackMoves
+    const moveNumber = Math.max(whiteMoves, blackMoves)
+    const isWhite = whiteMoves === blackMoves
+    
+    return { number: moveNumber, isWhite }
+  }
 
   // Render tree display for moves
   const renderTreeDisplay = () => {
@@ -509,6 +695,7 @@ export default function ChessBoardWithMoves({
     const renderMoveLine = (node: MoveNode, depth: number, moveNumber: number, isWhite: boolean, showMoveNumber: boolean = true): JSX.Element[] => {
       const elements: JSX.Element[] = []
       const isCurrentNode = node === currentNode
+      const isEditingComment = editingComment?.node === node
       
       // Render this move
       elements.push(
@@ -521,7 +708,22 @@ export default function ChessBoardWithMoves({
           )}
           {/* Move itself */}
           <span
-            onClick={() => navigateToNode(node)}
+            onClick={(e) => {
+              if (e.detail === 1) {
+                // Single click - navigate
+                navigateToNode(node)
+              } else if (e.detail === 2) {
+                // Double click - do nothing or could open dropdown
+              }
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              setDropdownMenu({
+                node,
+                x: e.clientX,
+                y: e.clientY
+              })
+            }}
             style={{
               cursor: "pointer",
               padding: "2px 6px",
@@ -546,6 +748,59 @@ export default function ChessBoardWithMoves({
           >
             {node.move.san}
           </span>
+          {/* Comment inline after move */}
+          {isEditingComment ? (
+            <textarea
+              autoFocus
+              defaultValue={node.comment || ""}
+              onBlur={(e) => {
+                const newComment = e.target.value.trim()
+                node.comment = newComment || undefined
+                setRootNodes([...rootNodes])
+                setEditingComment(null)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                  e.currentTarget.blur()
+                } else if (e.key === 'Escape') {
+                  setEditingComment(null)
+                }
+              }}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                marginLeft: "4px",
+                padding: "2px 4px",
+                fontSize: "13px",
+                fontFamily: "Arial, sans-serif",
+                border: "1px solid #ccc",
+                borderRadius: "3px",
+                resize: "none",
+                minHeight: "18px",
+                width: "150px",
+                backgroundColor: "#fff",
+                display: "inline-block",
+                verticalAlign: "middle"
+              }}
+            />
+          ) : node.comment ? (
+            <span
+              onClick={(e) => {
+                e.stopPropagation()
+                setEditingComment({ node })
+              }}
+              style={{
+                marginLeft: "4px",
+                padding: "2px 4px",
+                fontSize: "13px",
+                fontFamily: "Arial, sans-serif",
+                color: "#333",
+                cursor: "text",
+                display: "inline"
+              }}
+            >
+              {node.comment}
+            </span>
+          ) : null}
         </span>
       )
 
@@ -664,6 +919,135 @@ export default function ChessBoardWithMoves({
         flexDirection: "column",
         gap: "8px"
       }}>
+        {/* PGN Import/Export Controls */}
+        <div style={{
+          backgroundColor: "#fff",
+          border: "2px solid #ccc",
+          borderRadius: "8px",
+          padding: "12px",
+          display: "flex",
+          gap: "8px",
+          flexWrap: "wrap"
+        }}>
+          <button
+            onClick={() => {
+              const input = document.createElement('input')
+              input.type = 'file'
+              input.accept = '.pgn,.txt'
+              input.onchange = (e) => {
+                const file = (e.target as HTMLInputElement).files?.[0]
+                if (file) {
+                  const reader = new FileReader()
+                  reader.onload = (event) => {
+                    const pgn = event.target?.result as string
+                    try {
+                      const { rootNodes: importedNodes, metadata } = importFromPGN(pgn, initialFen)
+                      if (importedNodes.length > 0) {
+                        setRootNodes(importedNodes)
+                        setCurrentNode(importedNodes.find(n => n.isMainLine) || importedNodes[0])
+                        setBoardKey(prev => prev + 1)
+                        // Reset to first move if there are moves
+                        if (importedNodes[0]) {
+                          const path = getPathToNode(importedNodes[0])
+                          if (path.length > 0) {
+                            const firstMove = path[path.length - 1]
+                            const game = new Chess(initialFen)
+                            path.forEach(n => {
+                              game.move(n.move.san)
+                            })
+                            setLastMove([firstMove.move.from as Square, firstMove.move.to as Square])
+                          }
+                        }
+                        // Log metadata for now (will be used for study management later)
+                        console.log("Imported PGN metadata:", metadata)
+                        alert("PGN imported successfully!")
+                      } else {
+                        alert("Failed to import PGN. Please check the format.")
+                      }
+                    } catch (error) {
+                      console.error("Import error:", error)
+                      alert("Error importing PGN. Please check the format.")
+                    }
+                  }
+                  reader.readAsText(file)
+                }
+              }
+              input.click()
+            }}
+            style={{
+              padding: "8px 16px",
+              backgroundColor: "#4a90e2",
+              color: "#fff",
+              border: "none",
+              borderRadius: "4px",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: "500"
+            }}
+          >
+            Import PGN
+          </button>
+          <button
+            onClick={() => {
+              const pgn = exportToPGN(rootNodes, initialFen)
+              if (pgn) {
+                // Create download link
+                const blob = new Blob([pgn], { type: 'text/plain' })
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = 'chess_study.pgn'
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+                URL.revokeObjectURL(url)
+                alert("PGN exported successfully!")
+              } else {
+                alert("No moves to export.")
+              }
+            }}
+            style={{
+              padding: "8px 16px",
+              backgroundColor: "#28a745",
+              color: "#fff",
+              border: "none",
+              borderRadius: "4px",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: "500"
+            }}
+          >
+            Export PGN
+          </button>
+          <button
+            onClick={() => {
+              const pgn = exportToPGN(rootNodes, initialFen)
+              if (pgn) {
+                // Copy to clipboard
+                navigator.clipboard.writeText(pgn).then(() => {
+                  alert("PGN copied to clipboard!")
+                }).catch(() => {
+                  alert("Failed to copy to clipboard.")
+                })
+              } else {
+                alert("No moves to export.")
+              }
+            }}
+            style={{
+              padding: "8px 16px",
+              backgroundColor: "#6c757d",
+              color: "#fff",
+              border: "none",
+              borderRadius: "4px",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: "500"
+            }}
+          >
+            Copy PGN
+          </button>
+        </div>
+
         {/* Move Tree Display */}
         <div style={{
           height: "700px",
@@ -673,10 +1057,14 @@ export default function ChessBoardWithMoves({
           padding: "16px",
           overflowY: "auto",
           overflowX: "auto",
-          fontFamily: "monospace"
+          fontFamily: "monospace",
+          display: "flex",
+          flexDirection: "column"
         }}>
           <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", fontWeight: "600" }}>Move Tree</h3>
-          {renderTreeDisplay()}
+          <div style={{ flex: "1", overflowY: "auto" }}>
+            {renderTreeDisplay()}
+          </div>
         </div>
 
         {/* Navigation Controls */}
@@ -731,6 +1119,78 @@ export default function ChessBoardWithMoves({
           }}>🔄</button>
         </div>
       </div>
+      
+      {/* Dropdown Menu */}
+      {dropdownMenu && (
+        <>
+          <div
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 999
+            }}
+            onClick={() => setDropdownMenu(null)}
+          />
+          <div
+            style={{
+              position: "fixed",
+              top: dropdownMenu.y,
+              left: dropdownMenu.x,
+              backgroundColor: "#fff",
+              border: "1px solid #ccc",
+              borderRadius: "4px",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+              zIndex: 1000,
+              minWidth: "150px",
+              padding: "4px 0"
+            }}
+          >
+            <button
+              onClick={() => {
+                setDropdownMenu(null)
+                setEditingComment({ node: dropdownMenu.node })
+              }}
+              style={{
+                width: "100%",
+                padding: "8px 16px",
+                textAlign: "left",
+                backgroundColor: "transparent",
+                border: "none",
+                cursor: "pointer",
+                fontSize: "14px"
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f0f0f0"}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+            >
+              {dropdownMenu.node.comment ? "Edit Comment" : "Add Comment"}
+            </button>
+            <button
+              onClick={() => {
+                removeMove(dropdownMenu.node)
+                setDropdownMenu(null)
+              }}
+              style={{
+                width: "100%",
+                padding: "8px 16px",
+                textAlign: "left",
+                backgroundColor: "transparent",
+                border: "none",
+                cursor: "pointer",
+                fontSize: "14px",
+                color: "#d32f2f"
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#ffebee"}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+            >
+              Delete from here
+            </button>
+          </div>
+        </>
+      )}
+
     </div>
   )
 }

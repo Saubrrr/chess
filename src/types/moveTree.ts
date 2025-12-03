@@ -7,6 +7,7 @@ export interface MoveNode {
   parent: MoveNode | null
   children: MoveNode[]
   isMainLine: boolean
+  comment?: string
 }
 
 export function createMoveNode(
