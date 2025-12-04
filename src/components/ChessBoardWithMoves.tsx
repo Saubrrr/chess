@@ -2,24 +2,28 @@ import { useEffect, useRef, useState } from "react"
 import { Chess, Move, Square, PieceSymbol, Color } from "chess.js"
 import PieceImage from "./PieceImage"
 import { MoveNode, createMoveNode, getPathToNode, buildTreeDisplay, TreeLine } from "@/types/moveTree"
-import { exportToPGN, importFromPGN, PGNMetadata } from "@/utils/pgnUtils"
+import { exportToPGN, importFromPGN, PGNMetadata } from "@/utils/pgnHandler"
 
 interface ChessBoardWithMovesProps {
   onMove?: (move: Move) => void
   initialFen?: string
   movable?: boolean
+  initialRootNodes?: MoveNode[]
+  onSave?: (rootNodes: MoveNode[]) => void
 }
 
 export default function ChessBoardWithMoves({ 
   onMove, 
   initialFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-  movable = true 
+  movable = true,
+  initialRootNodes,
+  onSave
 }: ChessBoardWithMovesProps) {
   const gameRef = useRef(new Chess(initialFen))
   const [boardKey, setBoardKey] = useState(0)
   
-  // Move tree state - now supports multiple root nodes
-  const [rootNodes, setRootNodes] = useState<MoveNode[]>([])
+  // Move tree state
+  const [rootNodes, setRootNodes] = useState<MoveNode[]>(initialRootNodes || [])
   const [currentNode, setCurrentNode] = useState<MoveNode | null>(null)
   const [orientation, setOrientation] = useState<"white" | "black">("white")
   
@@ -131,9 +135,11 @@ export default function ChessBoardWithMoves({
           // Create new root node
           const isMainLine = rootNodes.length === 0
           const newNode = createMoveNode(move, newFen, null, isMainLine)
-          setRootNodes(prev => [...prev, newNode])
+          const updatedRootNodes = [...rootNodes, newNode]
+          setRootNodes(updatedRootNodes)
           setCurrentNode(newNode)
           setLastMove([move.from as Square, move.to as Square])
+          if (onSave) onSave(updatedRootNodes)
         }
       } else {
       // Check if this move already exists as a child
@@ -152,6 +158,7 @@ export default function ChessBoardWithMoves({
           currentNode.children.push(newNode)
           setCurrentNode(newNode)
           setLastMove([move.from as Square, move.to as Square])
+          if (onSave) onSave(rootNodes)
         }
       }
       
@@ -223,6 +230,23 @@ export default function ChessBoardWithMoves({
       setDragPosition(null)
     }
   }
+
+  // Sync initialRootNodes when they change
+  useEffect(() => {
+    if (initialRootNodes !== undefined) {
+      setRootNodes(initialRootNodes)
+      // Reset to first main line node if available
+      if (initialRootNodes.length > 0) {
+        const mainLineNode = initialRootNodes.find(n => n.isMainLine) || initialRootNodes[0]
+        setCurrentNode(mainLineNode)
+        setLastMove([mainLineNode.move.from as Square, mainLineNode.move.to as Square])
+      } else {
+        setCurrentNode(null)
+        setLastMove(null)
+      }
+      setBoardKey(prev => prev + 1)
+    }
+  }, [initialRootNodes])
 
   useEffect(() => {
     document.addEventListener('mousemove', handleMouseMove)
@@ -940,34 +964,46 @@ export default function ChessBoardWithMoves({
                   const reader = new FileReader()
                   reader.onload = (event) => {
                     const pgn = event.target?.result as string
-                    try {
-                      const { rootNodes: importedNodes, metadata } = importFromPGN(pgn, initialFen)
-                      if (importedNodes.length > 0) {
-                        setRootNodes(importedNodes)
-                        setCurrentNode(importedNodes.find(n => n.isMainLine) || importedNodes[0])
-                        setBoardKey(prev => prev + 1)
-                        // Reset to first move if there are moves
-                        if (importedNodes[0]) {
-                          const path = getPathToNode(importedNodes[0])
-                          if (path.length > 0) {
-                            const firstMove = path[path.length - 1]
-                            const game = new Chess(initialFen)
-                            path.forEach(n => {
-                              game.move(n.move.san)
-                            })
-                            setLastMove([firstMove.move.from as Square, firstMove.move.to as Square])
-                          }
-                        }
-                        // Log metadata for now (will be used for study management later)
-                        console.log("Imported PGN metadata:", metadata)
-                        alert("PGN imported successfully!")
-                      } else {
-                        alert("Failed to import PGN. Please check the format.")
-                      }
-                    } catch (error) {
-                      console.error("Import error:", error)
-                      alert("Error importing PGN. Please check the format.")
+                    const importResult = importFromPGN(pgn, initialFen)
+                    
+                    // Check for errors
+                    if (importResult.errors.length > 0) {
+                      const errorMsg = importResult.errors.join("\n")
+                      alert(`Failed to import PGN:\n\n${errorMsg}`)
+                      return
                     }
+                    
+                    // Check if we got any moves
+                    if (importResult.rootNodes.length === 0) {
+                      alert("No valid moves found in PGN. Please check the format.")
+                      return
+                    }
+                    
+                    // Show warnings if any
+                    if (importResult.warnings.length > 0) {
+                      console.warn("PGN import warnings:", importResult.warnings)
+                    }
+                    
+                    // Import successful
+                    const importedNodes = importResult.rootNodes
+                    setRootNodes(importedNodes)
+                    setCurrentNode(importedNodes.find(n => n.isMainLine) || importedNodes[0])
+                    setBoardKey(prev => prev + 1)
+                    // Reset to first move if there are moves
+                    if (importedNodes[0]) {
+                      const path = getPathToNode(importedNodes[0])
+                      if (path.length > 0) {
+                        const firstMove = path[path.length - 1]
+                        const game = new Chess(initialFen)
+                        path.forEach(n => {
+                          game.move(n.move.san)
+                        })
+                        setLastMove([firstMove.move.from as Square, firstMove.move.to as Square])
+                      }
+                    }
+                    // Log metadata for now (will be used for study management later)
+                    console.log("Imported PGN metadata:", importResult.metadata)
+                    alert("PGN imported successfully!")
                   }
                   reader.readAsText(file)
                 }

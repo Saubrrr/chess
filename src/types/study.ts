@@ -1,5 +1,5 @@
 import { MoveNode } from "./moveTree"
-import { PGNMetadata } from "@/utils/pgnUtils"
+import { PGNMetadata } from "@/utils/pgnHandler"
 
 // A Game represents a single chess game with moves and variations
 export interface Game {

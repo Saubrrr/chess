@@ -10,7 +10,19 @@ export interface PGNMetadata {
   White?: string
   Black?: string
   Result?: string
+  Opening?: string
+  ECO?: string
+  ChapterName?: string
+  StudyName?: string
   [key: string]: string | undefined // Allow additional tags
+}
+
+// Import result containing both moves and metadata
+export interface PGNImportResult {
+  rootNodes: MoveNode[]
+  metadata: PGNMetadata
+  errors: string[]
+  warnings: string[]
 }
 
 // Export move tree to PGN format
@@ -143,42 +155,28 @@ export function exportToPGN(rootNodes: MoveNode[], initialFen?: string, metadata
   return fullPGN
 }
 
-// Import result containing both moves and metadata
-export interface PGNImportResult {
-  rootNodes: MoveNode[]
-  metadata: PGNMetadata
-}
-
-// Import PGN to move tree structure with metadata
-export function importFromPGN(pgn: string, initialFen?: string): PGNImportResult {
-  const rootNodes: MoveNode[] = []
-  const metadata: PGNMetadata = {}
+// Generate chapter name from PGN metadata
+export function generateChapterNameFromMetadata(metadata: PGNMetadata, defaultName: string = "Untitled Chapter"): string {
+  if (metadata.ChapterName) {
+    return metadata.ChapterName
+  }
   
-  if (!pgn || pgn.trim().length === 0) {
-    return { rootNodes, metadata }
+  if (metadata.Opening) {
+    return metadata.Opening
   }
-
-  try {
-    // Parse headers first
-    const { moveText, headers } = parsePGNHeaders(pgn)
-    
-    // Store all headers in metadata
-    Object.assign(metadata, headers)
-    
-    // Parse moves from move text
-    const parsed = parsePGNWithVariations(moveText, initialFen || "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
-    
-    return { rootNodes: parsed, metadata }
-  } catch (error) {
-    console.error("Error parsing PGN:", error)
-    return { rootNodes, metadata }
+  
+  if (metadata.Event && metadata.Event !== "?") {
+    return metadata.Event
   }
+  
+  return defaultName
 }
 
 // Parse PGN headers (tag pairs)
-function parsePGNHeaders(pgn: string): { moveText: string; headers: PGNMetadata } {
+function parsePGNHeaders(pgn: string): { moveText: string; headers: PGNMetadata; errors: string[] } {
   const headers: PGNMetadata = {}
   let moveText = ""
+  const errors: string[] = []
   
   // Split by lines
   const lines = pgn.split(/\r?\n/)
@@ -211,18 +209,152 @@ function parsePGNHeaders(pgn: string): { moveText: string; headers: PGNMetadata 
     moveText = pgn
   }
   
-  return { moveText: moveText.trim(), headers }
+  return { moveText: moveText.trim(), headers, errors }
 }
 
-interface ParsedMove {
-  moveNumber: number
-  isWhite: boolean
-  san: string
-  comment?: string
-  variations?: ParsedMove[][]
+// Improved move parser that handles concatenated moves
+function parseMoveNumber(pgn: string, i: number): { moveNumber: number | null; newIndex: number } {
+  let num = ""
+  let j = i
+  
+  // Skip whitespace
+  while (j < pgn.length && /\s/.test(pgn[j])) j++
+  if (j >= pgn.length) return { moveNumber: null, newIndex: j }
+  
+  // Read digits
+  while (j < pgn.length && /\d/.test(pgn[j])) {
+    num += pgn[j]
+    j++
+  }
+  
+  // Check for dots
+  if (j < pgn.length && pgn[j] === '.') {
+    j++
+    // Check for additional dots (for black moves like "1...")
+    if (j < pgn.length && pgn[j] === '.') {
+      j++
+      if (j < pgn.length && pgn[j] === '.') {
+        j++
+      }
+    }
+  }
+  
+  return { moveNumber: num ? parseInt(num, 10) : null, newIndex: j }
 }
 
-function parsePGNWithVariations(pgn: string, startFen: string): MoveNode[] {
+// Improved move reader that handles concatenated moves like "e52."
+function readMoveImproved(pgn: string, i: number): { move: string | null; newIndex: number } {
+  let idx = i
+  
+  // Skip whitespace
+  while (idx < pgn.length && /\s/.test(pgn[idx])) idx++
+  if (idx >= pgn.length) return { move: null, newIndex: idx }
+  
+  // Check for result markers first
+  const resultMarkers = ['1-0', '0-1', '1/2-1/2', '*']
+  for (const marker of resultMarkers) {
+    if (pgn.substring(idx, idx + marker.length) === marker) {
+      return { move: null, newIndex: idx + marker.length } // Result marker, not a move
+    }
+  }
+  
+  // Try to parse move number first
+  const { moveNumber, newIndex: afterNumber } = parseMoveNumber(pgn, idx)
+  idx = afterNumber
+  
+  // Skip whitespace after move number
+  while (idx < pgn.length && /\s/.test(pgn[idx])) idx++
+  if (idx >= pgn.length) return { move: null, newIndex: idx }
+  
+  // Read the actual move notation
+  let move = ""
+  const moveStart = idx
+  
+  // Move notation can contain: letters, numbers, =, +, #, x, -
+  // But we need to stop at whitespace, comments, variations, or when we hit another move number
+  while (idx < pgn.length) {
+    const char = pgn[idx]
+    
+    // Stop conditions
+    if (char === ' ' || char === '\t' || char === '\n' || char === '\r') {
+      // Whitespace - stop
+      break
+    }
+    if (char === '{' || char === '(' || char === ')') {
+      // Comment or variation - stop
+      break
+    }
+    
+    // Check if we've hit another move number pattern (digit followed by dot)
+    if (/\d/.test(char) && idx + 1 < pgn.length && pgn[idx + 1] === '.') {
+      // This might be the start of a new move number
+      // But first check if it's part of the current move (like promotion "e8=Q")
+      // Look back a bit to see if we're in the middle of a valid move notation
+      if (move.length > 0 && /[a-h1-8]/.test(char)) {
+        // Might be part of move, continue
+        move += char
+        idx++
+        continue
+      }
+      // Otherwise, this is likely a new move number, stop
+      break
+    }
+    
+    // Valid move character
+    if (/[a-h1-8NBRQKx+#=-]/.test(char) || char === 'O') {
+      move += char
+      idx++
+    } else {
+      // Unexpected character, stop
+      break
+    }
+  }
+  
+  return { move: move.trim() || null, newIndex: idx }
+}
+
+// Import PGN to move tree structure with metadata
+export function importFromPGN(pgn: string, initialFen?: string): PGNImportResult {
+  const rootNodes: MoveNode[] = []
+  const metadata: PGNMetadata = {}
+  const errors: string[] = []
+  const warnings: string[] = []
+  
+  if (!pgn || pgn.trim().length === 0) {
+    errors.push("PGN text is empty")
+    return { rootNodes, metadata, errors, warnings }
+  }
+
+  try {
+    // Parse headers first
+    const { moveText, headers, errors: headerErrors } = parsePGNHeaders(pgn)
+    errors.push(...headerErrors)
+    
+    // Store all headers in metadata
+    Object.assign(metadata, headers)
+    
+    // Parse moves from move text
+    const parsed = parsePGNWithVariations(moveText, initialFen || "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", errors, warnings)
+    
+    if (parsed.length === 0 && moveText.trim().length > 0) {
+      errors.push("No valid moves found in PGN. Please check the format.")
+    }
+    
+    return { rootNodes: parsed, metadata, errors, warnings }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    errors.push(`Failed to parse PGN: ${errorMessage}`)
+    console.error("Error parsing PGN:", error)
+    return { rootNodes, metadata, errors, warnings }
+  }
+}
+
+function parsePGNWithVariations(
+  pgn: string, 
+  startFen: string,
+  errors: string[],
+  warnings: string[]
+): MoveNode[] {
   const rootNodes: MoveNode[] = []
   const game = new Chess(startFen)
   const startIsWhite = game.turn() === 'w'
@@ -259,22 +391,9 @@ function parsePGNWithVariations(pgn: string, startFen: string): MoveNode[] {
   }
 
   const readMove = (): string | null => {
-    skipWhitespace()
-    if (i >= pgn.length) return null
-
-    // Skip move number (e.g., "1." or "1...")
-    while (i < pgn.length && /[\d.]/.test(pgn[i])) i++
-    skipWhitespace()
-    if (i >= pgn.length) return null
-
-    // Read move notation (until space, comment, variation, or end)
-    let move = ""
-    while (i < pgn.length && !/\s/.test(pgn[i]) && pgn[i] !== '{' && pgn[i] !== '(' && pgn[i] !== ')') {
-      move += pgn[i]
-      i++
-    }
-    
-    return move.trim() || null
+    const { move, newIndex } = readMoveImproved(pgn, i)
+    i = newIndex
+    return move
   }
 
   // Parse a line (main line or variation)
@@ -288,6 +407,15 @@ function parsePGNWithVariations(pgn: string, startFen: string): MoveNode[] {
 
     while (i < pgn.length) {
       skipWhitespace()
+      
+      // Check for result markers
+      if (i < pgn.length) {
+        const remaining = pgn.substring(i)
+        if (remaining.startsWith('1-0') || remaining.startsWith('0-1') || remaining.startsWith('1/2-1/2') || remaining.startsWith('*')) {
+          // End of game
+          break
+        }
+      }
       
       // Check for end of variation
       if (pgn[i] === ')') {
@@ -306,6 +434,7 @@ function parsePGNWithVariations(pgn: string, startFen: string): MoveNode[] {
           
           if (!varMove) {
             // Skip malformed variation
+            warnings.push(`Skipping malformed variation at position ${i}`)
             while (i < pgn.length && pgn[i] !== ')') {
               if (pgn[i] === '(') {
                 let depth = 1
@@ -359,7 +488,7 @@ function parsePGNWithVariations(pgn: string, startFen: string): MoveNode[] {
               }
             }
           } catch (e) {
-            // Invalid move, skip
+            warnings.push(`Invalid move in variation: ${varMove} - ${e instanceof Error ? e.message : String(e)}`)
             break
           }
         }
@@ -371,8 +500,29 @@ function parsePGNWithVariations(pgn: string, startFen: string): MoveNode[] {
         continue
       }
 
+      // Skip any leading comments before trying to read a move
+      if (pgn[i] === '{') {
+        readComment() // This will skip the comment
+        skipWhitespace()
+        continue // Try again to read a move after skipping the comment
+      }
+
       const move = readMove()
-      if (!move) break
+      if (!move) {
+        // Check if there's a comment we missed
+        skipWhitespace()
+        if (i < pgn.length && pgn[i] === '{') {
+          readComment() // Skip this comment and try again
+          skipWhitespace()
+          continue
+        }
+        // Check if it's a result marker
+        const remaining = pgn.substring(i)
+        if (remaining.startsWith('1-0') || remaining.startsWith('0-1') || remaining.startsWith('1/2-1/2') || remaining.startsWith('*')) {
+          break
+        }
+        break
+      }
 
       const comment = readComment()
 
@@ -402,9 +552,11 @@ function parsePGNWithVariations(pgn: string, startFen: string): MoveNode[] {
           currentMoveNumber = currentIsWhite ? currentMoveNumber : currentMoveNumber + 1
           currentIsWhite = !currentIsWhite
         } else {
+          errors.push(`Invalid move: ${move}`)
           break
         }
       } catch (e) {
+        errors.push(`Failed to parse move "${move}": ${e instanceof Error ? e.message : String(e)}`)
         break
       }
 
@@ -448,7 +600,7 @@ function parsePGNWithVariations(pgn: string, startFen: string): MoveNode[] {
           if (pgn[i] === ')') i++
         }
       } catch (e) {
-        // Skip invalid variation
+        warnings.push(`Skipping invalid root variation: ${e instanceof Error ? e.message : String(e)}`)
         while (i < pgn.length && pgn[i] !== ')') i++
         if (i < pgn.length) i++
       }
