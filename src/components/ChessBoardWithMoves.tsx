@@ -2,7 +2,16 @@ import { useEffect, useRef, useState } from "react"
 import { Chess, Move, Square, PieceSymbol, Color } from "chess.js"
 import PieceImage from "./PieceImage"
 import { MoveNode, createMoveNode, getPathToNode, buildTreeDisplay, TreeLine } from "@/types/moveTree"
-import { exportToPGN, importFromPGN, PGNMetadata } from "@/utils/pgnHandler"
+//import { exportToPGN, importFromPGN, PGNMetadata } from "@/utils/pgnHandler"
+//import { importFromPGN, exportToPGN } from "@/utils/pgnHandler"
+import {
+  exportToPGN,
+  importFromPGN,
+  PGNMetadata,
+  PGNImportResult
+} from "@/utils/pgnUtils"
+
+
 
 interface ChessBoardWithMovesProps {
   onMove?: (move: Move) => void
@@ -964,7 +973,7 @@ export default function ChessBoardWithMoves({
                   const reader = new FileReader()
                   reader.onload = (event) => {
                     const pgn = event.target?.result as string
-                    const importResult = importFromPGN(pgn, initialFen)
+                    const importResult = importFromPGN(pgn)
                     
                     // Check for errors
                     if (importResult.errors.length > 0) {
